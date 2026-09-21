@@ -1,0 +1,6 @@
+[submodule "external/pttea_seg"]
+	path = external/pttea_seg
+	url = https://github.com/Voldemort108X/pttea_seg.git
+[submodule "external/pseudolabel"]
+	path = external/pseudolabel
+	url = https://github.com/26nicolet/pseudolabel.git
