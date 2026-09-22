@@ -79,6 +79,8 @@ def run_baseline(name, seg, en, cases, args):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--data", default=tw.EXAMPLE_DATA)
+    p.add_argument("--dataset", default="acdc_mat", choices=list(tw.data.LOADERS),
+                   help="acdc_mat (example slices / ACDC .mat), mnm (raw M&Ms), lvquant (train .mat), myops (setup_myops.py output)")
     p.add_argument("--seg_ckpt", default=tw.SEG_CKPT)
     p.add_argument("--energy_ckpt", default=tw.ENERGY_CKPT)
     p.add_argument("--only", nargs="*", default=list(BASELINES))
@@ -93,7 +95,7 @@ def main():
     os.makedirs(out, exist_ok=True)
     seg = tw.load_seg_model(args.seg_ckpt, args.device)
     en = tw.load_energy_model(args.energy_ckpt, args.device)
-    cases = tw.load_mat_dir(args.data)
+    cases = tw.data.LOADERS[args.dataset](args.data)
     print(f"{len(cases)} cases, {sum(len(v) for v in cases.values())} slices from {args.data}")
 
     metrics, all_rows, all_losses = {}, [], {}
@@ -120,7 +122,21 @@ def main():
     open(os.path.join(out, "RESULTS.md"), "w").write(
         f"# Results\n\ndata: `{args.data}`  seg: `{args.seg_ckpt}`  energy: `{args.energy_ckpt}`  "
         f"iters={args.num_iterations} lr={args.lr} device={args.device}\n\n{md}\n")
-    print("\n" + md + f"\n\nwritten to {out}/")
+    print("\n" + md)
+    if args.dataset in ("mnm", "lvquant", "myops"):
+        ref = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                          "reference", "pttea_table1_unet_acdc.json")))[args.dataset]
+        pairs = [("no_adapt", "Pretrained"), ("pttea", "Ours")]
+        lines = [f"\nvs PTTEA Table 1 (UNet, ACDC->{args.dataset}); DSC in %, ASD px: ours / paper",
+                 "| baseline | paper row | LV DSC | LV ASD | Myo DSC | Myo ASD |", "|---|---|---|---|---|---|"]
+        for mine, theirs in pairs:
+            if mine not in metrics: continue
+            e, my, r = metrics[mine]["per_class"]["Endo/LV"], metrics[mine]["per_class"]["Myocardium"], ref[theirs]
+            lines.append(f"| {mine} | {theirs} | {100*e['dice']:.2f} / {r['lv_dsc']} | {e['asd']:.2f} / {r['lv_asd']} | "
+                         f"{100*my['dice']:.2f} / {r['myo_dsc']} | {my['asd']:.2f} / {r['myo_asd']} |")
+        cmp_md = "\n".join(lines); print(cmp_md)
+        open(os.path.join(out, "RESULTS.md"), "a").write("\n" + cmp_md + "\n")
+    print(f"\nwritten to {out}/")
 
 
 if __name__ == "__main__":

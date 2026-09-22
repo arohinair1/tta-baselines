@@ -1,0 +1,13 @@
+{
+  "_source": "Zhang et al., Progressive Test Time Energy Adaptation for Medical Image Segmentation, ICCV 2025 (arXiv 2503.16616), Table 1, UNet rows, ACDC source. DSC in %, ASD in pixels. 'Pretrained' = no adaptation, 'Ours' = PTTEA.",
+  "_paper_setup": "256x256 at 1mm, energy patch 16, tau=50, 10 Adam iterations, BatchNorm only. Paper text says lr 1e-4; run_pttea.py default is 1e-2.",
+  "lvquant": {"Pretrained": {"lv_dsc": 58.98, "lv_asd": 24.40, "myo_dsc": 42.52, "myo_asd": 19.37},
+              "TENT":       {"lv_dsc": 65.78, "lv_asd": 15.37, "myo_dsc": 51.57, "myo_asd": 12.78},
+              "Ours":       {"lv_dsc": 76.93, "lv_asd":  8.77, "myo_dsc": 59.43, "myo_asd": 11.68}},
+  "myops":   {"Pretrained": {"lv_dsc": 85.69, "lv_asd":  2.99, "myo_dsc": 72.91, "myo_asd":  2.26},
+              "TENT":       {"lv_dsc": 85.63, "lv_asd":  2.94, "myo_dsc": 73.49, "myo_asd":  3.24},
+              "Ours":       {"lv_dsc": 86.06, "lv_asd":  2.93, "myo_dsc": 78.89, "myo_asd":  1.91}},
+  "mnm":     {"Pretrained": {"lv_dsc": 47.69, "lv_asd": 24.11, "myo_dsc": 41.19, "myo_asd": 15.89},
+              "TENT":       {"lv_dsc": 57.01, "lv_asd": 21.15, "myo_dsc": 48.26, "myo_asd": 19.99},
+              "Ours":       {"lv_dsc": 61.84, "lv_asd": 19.28, "myo_dsc": 53.13, "myo_asd": 15.88}}
+}
