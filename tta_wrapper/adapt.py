@@ -202,3 +202,30 @@ def predict_no_adapt(seg_model, image: torch.Tensor, device="cpu") -> SliceResul
         probs = torch.softmax(seg_model(image.to(device)), dim=1)
     return SliceResult(pred=probs.argmax(dim=1).cpu().numpy()[0], probs=probs,
                        confidence=probs.max(dim=1)[0].cpu().numpy()[0])
+
+
+def adapt_batch(seg_model_base, energy_model, images: torch.Tensor, *,
+                num_iterations: int = 10, lr: float = 0.01, device="cpu") -> List[SliceResult]:
+    """run_pttea.py semantics: adapt ONE fresh model copy on a BATCH of slices
+    jointly (BatchNorm statistics pooled over the batch), energy loss only,
+    fixed iterations, prediction from the last iteration's forward.
+    images: (B,1,H,W). Returns one SliceResult per image."""
+    images = images.to(device)
+    model = configure_model_for_tent(copy.deepcopy(seg_model_base)).to(device)
+    opt = torch.optim.Adam([p for p in model.parameters() if p.requires_grad], lr=lr)
+    losses, last_probs = [], None
+    for _ in range(num_iterations):
+        opt.zero_grad()
+        logits = model(images)
+        parts = tta_loss(logits, energy_model, strategy="none")
+        losses.append(parts.as_floats())
+        last_probs = torch.softmax(logits, dim=1).detach()
+        parts.total.backward()
+        opt.step()
+    out = []
+    for i in range(images.shape[0]):
+        p = last_probs[i:i + 1]
+        out.append(SliceResult(pred=p.argmax(dim=1).cpu().numpy()[0], probs=p,
+                               confidence=p.max(dim=1)[0].cpu().numpy()[0],
+                               losses=losses, iters_run=num_iterations))
+    return out

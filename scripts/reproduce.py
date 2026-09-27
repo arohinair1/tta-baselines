@@ -50,6 +50,22 @@ def run_baseline(name, seg, en, cases, args):
     cfg = BASELINES[name]
     dice, iou, asd, rows, losses = [], [], [], [], []
     t0 = time.time()
+    if name == "pttea" and args.batch_size > 1:
+        # run_pttea.py style: batches of consecutive slices adapted jointly
+        flat = [s for v in cases.values() for s in v]
+        for b in range(0, len(flat), args.batch_size):
+            chunk = flat[b:b + args.batch_size]
+            torch.manual_seed(args.seed)
+            res = tw.adapt.adapt_batch(seg, en, torch.cat([s.tensor() for s in chunk], 0),
+                                       num_iterations=args.num_iterations, lr=args.lr, device=args.device)
+            for s, r in zip(chunk, res):
+                d, i, a = (tw.compute_dice(r.pred, s.label), tw.compute_iou(r.pred, s.label),
+                           tw.compute_asd(r.pred, s.label))
+                dice.append(d); iou.append(i); asd.append(a)
+                rows.append({"baseline": name, "case": s.case, "slice": s.name,
+                             "dice_endo": d[1], "dice_myo": d[2], "dice_fg": d[1:].mean(), "iters": r.iters_run})
+        summary = tw.summarize(dice, iou, asd); summary["seconds"] = round(time.time() - t0, 1)
+        return summary, rows, []
     for case, slices in cases.items():
         prev_img = prev_label = prev_conf = None
         for s in slices:
@@ -87,6 +103,8 @@ def main():
     p.add_argument("--num_iterations", type=int, default=10)
     p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--batch_size", type=int, default=1,
+                   help="pttea only: adapt this many consecutive slices jointly (run_pttea.py style). 1 = per slice.")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--out", default=None)
     args = p.parse_args()
@@ -121,7 +139,7 @@ def main():
     md = "\n".join(lines)
     open(os.path.join(out, "RESULTS.md"), "w").write(
         f"# Results\n\ndata: `{args.data}`  seg: `{args.seg_ckpt}`  energy: `{args.energy_ckpt}`  "
-        f"iters={args.num_iterations} lr={args.lr} device={args.device}\n\n{md}\n")
+        f"iters={args.num_iterations} lr={args.lr} batch_size={args.batch_size} device={args.device}\n\n{md}\n")
     print("\n" + md)
     if args.dataset in ("mnm", "lvquant", "myops"):
         ref = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

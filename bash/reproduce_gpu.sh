@@ -12,5 +12,5 @@
 # e.g. sbatch bash/reproduce_gpu.sh --data /path/to/ACDC/test --seg_ckpt ... --energy_ckpt ...
 module load PyTorch/2.9.1-foss-2024a-CUDA-12.8.0 torchvision/0.24.1-foss-2024a-CUDA-12.8.0
 cd "$SLURM_SUBMIT_DIR"
-python -m pytest tests -q -p no:cacheprovider
+[ -z "$SKIP_TESTS" ] && python -m pytest tests -q -p no:cacheprovider
 python scripts/reproduce.py --device cuda "$@"
