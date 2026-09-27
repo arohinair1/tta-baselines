@@ -21,3 +21,14 @@ def summarize(dice, iou, asd):
         },
         "n_slices": int(len(dice)),
     }
+
+
+def per_case_dice(preds_by_case: dict, labels_by_case: dict, num_classes: int = 3):
+    """Paper-style aggregation: stack a case's slices into a volume, one Dice per
+    class per case, then average over cases. (Per-slice averaging penalises
+    apex/base slices with a few labelled pixels.)"""
+    out = []
+    for c in preds_by_case:
+        P = np.stack(preds_by_case[c]); L = np.stack(labels_by_case[c])
+        out.append(compute_dice(P, L, num_classes))
+    return np.asarray(out)

@@ -49,6 +49,7 @@ BASELINES = {
 def run_baseline(name, seg, en, cases, args):
     cfg = BASELINES[name]
     dice, iou, asd, rows, losses = [], [], [], [], []
+    pc_pred, pc_lbl = {}, {}
     t0 = time.time()
     if name == "pttea" and args.batch_size > 1:
         # run_pttea.py style: batches of consecutive slices adapted jointly
@@ -60,12 +61,14 @@ def run_baseline(name, seg, en, cases, args):
                                        num_iterations=args.num_iterations, lr=args.lr, device=args.device)
             for s, r in zip(chunk, res):
                 if args.energy_mask: r.pred = tw.adapt.energy_mask_pred(r.probs.to(args.device), en)
+                pc_pred.setdefault(s.case, []).append(r.pred); pc_lbl.setdefault(s.case, []).append(s.label)
                 d, i, a = (tw.compute_dice(r.pred, s.label), tw.compute_iou(r.pred, s.label),
                            tw.compute_asd(r.pred, s.label))
                 dice.append(d); iou.append(i); asd.append(a)
                 rows.append({"baseline": name, "case": s.case, "slice": s.name,
                              "dice_endo": d[1], "dice_myo": d[2], "dice_fg": d[1:].mean(), "iters": r.iters_run})
         summary = tw.summarize(dice, iou, asd); summary["seconds"] = round(time.time() - t0, 1)
+        summary["per_case_dice"] = tw.metrics.per_case_dice(pc_pred, pc_lbl).mean(0).tolist()
         return summary, rows, []
     for case, slices in cases.items():
         prev_img = prev_label = prev_conf = None
@@ -83,6 +86,7 @@ def run_baseline(name, seg, en, cases, args):
                 prev_img, prev_label, prev_conf = s.image, r.pred.astype(np.uint8), r.confidence
             if args.energy_mask and cfg is not None:
                 r.pred = tw.adapt.energy_mask_pred(r.probs.to(args.device), en)
+            pc_pred.setdefault(s.case, []).append(r.pred); pc_lbl.setdefault(s.case, []).append(s.label)
             d, i, a = (tw.compute_dice(r.pred, s.label), tw.compute_iou(r.pred, s.label),
                        tw.compute_asd(r.pred, s.label))
             dice.append(d); iou.append(i); asd.append(a)
@@ -92,6 +96,7 @@ def run_baseline(name, seg, en, cases, args):
             losses.append({"slice": s.name, "losses": r.losses})
     summary = tw.summarize(dice, iou, asd)
     summary["seconds"] = round(time.time() - t0, 1)
+    summary["per_case_dice"] = tw.metrics.per_case_dice(pc_pred, pc_lbl).mean(0).tolist()
     return summary, rows, losses
 
 
@@ -106,6 +111,8 @@ def main():
     p.add_argument("--num_iterations", type=int, default=10)
     p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--preproc", default="crop", choices=["crop", "resize"],
+                   help="mnm only: 'crop' = 1mm resample + 256 crop at myo centroid (Nicole); 'resize' = whole slice resized to 256x256 (paper text)")
     p.add_argument("--energy_mask", action="store_true",
                    help="apply run_pttea.py's energy-score patch mask to adapted predictions (pred_mask)")
     p.add_argument("--batch_size", type=int, default=1,
@@ -118,7 +125,8 @@ def main():
     os.makedirs(out, exist_ok=True)
     seg = tw.load_seg_model(args.seg_ckpt, args.device)
     en = tw.load_energy_model(args.energy_ckpt, args.device)
-    cases = tw.data.LOADERS[args.dataset](args.data)
+    cases = tw.data.LOADERS[args.dataset](args.data, preproc=args.preproc) if args.dataset == "mnm" \
+        else tw.data.LOADERS[args.dataset](args.data)
     print(f"{len(cases)} cases, {sum(len(v) for v in cases.values())} slices from {args.data}")
 
     metrics, all_rows, all_losses = {}, [], {}
@@ -126,9 +134,10 @@ def main():
         print(f"[{name}] ...", flush=True)
         m, rows, losses = run_baseline(name, seg, en, cases, args)
         metrics[name] = m; all_rows += rows; all_losses[name] = losses
-        pc = m["per_class"]
+        pc = m["per_class"]; v = m["per_case_dice"]
         print(f"[{name}] Dice fg={m['overall_dice_fg']:.4f}  endo={pc['Endo/LV']['dice']:.4f} "
-              f"myo={pc['Myocardium']['dice']:.4f}  ASD myo={pc['Myocardium']['asd']:.3f}  ({m['seconds']}s)")
+              f"myo={pc['Myocardium']['dice']:.4f}  ASD myo={pc['Myocardium']['asd']:.3f}  "
+              f"| per-volume Dice endo={v[1]:.4f} myo={v[2]:.4f}  ({m['seconds']}s)")
 
     json.dump({"args": vars(args), "metrics": metrics}, open(os.path.join(out, "metrics.json"), "w"), indent=2)
     json.dump(all_losses, open(os.path.join(out, "losses.json"), "w"))
@@ -150,13 +159,14 @@ def main():
         ref = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                           "reference", "pttea_table1_unet_acdc.json")))[args.dataset]
         pairs = [("no_adapt", "Pretrained"), ("pttea", "Ours")]
-        lines = [f"\nvs PTTEA Table 1 (UNet, ACDC->{args.dataset}); DSC in %, ASD px: ours / paper",
+        lines = [f"\nvs PTTEA Table 1 (UNet, ACDC->{args.dataset}); DSC in %, ASD px: ours(per-slice) / ours(per-volume) / paper",
                  "| baseline | paper row | LV DSC | LV ASD | Myo DSC | Myo ASD |", "|---|---|---|---|---|---|"]
         for mine, theirs in pairs:
             if mine not in metrics: continue
             e, my, r = metrics[mine]["per_class"]["Endo/LV"], metrics[mine]["per_class"]["Myocardium"], ref[theirs]
-            lines.append(f"| {mine} | {theirs} | {100*e['dice']:.2f} / {r['lv_dsc']} | {e['asd']:.2f} / {r['lv_asd']} | "
-                         f"{100*my['dice']:.2f} / {r['myo_dsc']} | {my['asd']:.2f} / {r['myo_asd']} |")
+            v = metrics[mine]["per_case_dice"]
+            lines.append(f"| {mine} | {theirs} | {100*e['dice']:.2f} / {100*v[1]:.2f} / {r['lv_dsc']} | {e['asd']:.2f} / {r['lv_asd']} | "
+                         f"{100*my['dice']:.2f} / {100*v[2]:.2f} / {r['myo_dsc']} | {my['asd']:.2f} / {r['myo_asd']} |")
         cmp_md = "\n".join(lines); print(cmp_md)
         open(os.path.join(out, "RESULTS.md"), "a").write("\n" + cmp_md + "\n")
     print(f"\nwritten to {out}/")

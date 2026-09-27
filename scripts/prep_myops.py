@@ -36,9 +36,26 @@ except ImportError:
     sys.modules["sklearn"] = sk; sys.modules["sklearn.model_selection"] = ms
 
 from setup_myops import process_subject  # noqa: E402
+import numpy as np, nibabel as nib, scipy.io as sio  # noqa: E402
+from scipy.ndimage import zoom  # noqa: E402
 
 
-def main(src, out):
+def process_subject_resize(case_dir, cid, out, size=256):
+    """Alternative to Nicole's crop: whole slice resized to size x size (paper text)."""
+    img = nib.load(glob.glob(os.path.join(case_dir, "*_C0.nii.gz"))[0]).get_fdata()
+    seg = nib.load(glob.glob(os.path.join(case_dir, "*_gd.nii.gz"))[0]).get_fdata()
+    f = (size / img.shape[0], size / img.shape[1])
+    for s in range(img.shape[2]):
+        sl = zoom(img[:, :, s], f, order=3)
+        if sl.max() > sl.min(): sl = (sl - sl.min()) / (sl.max() - sl.min())
+        endo = zoom((seg[:, :, s] == 500).astype(float), f, order=0) > 0.5
+        myo = zoom(np.isin(seg[:, :, s], [200, 1220, 2221]).astype(float), f, order=0) > 0.5
+        if endo.sum() > 0 or myo.sum() > 0:
+            sio.savemat(os.path.join(out, f"{cid}_slice_{s:02d}.mat"),
+                        {"im": sl, "endo_seg": endo.astype(int), "myo_seg": myo.astype(int)})
+
+
+def main(src, out, mode="crop"):
     src, out = os.path.expanduser(src), os.path.expanduser(out)
     raw = os.path.join(os.path.dirname(out.rstrip("/")), "raw")
     os.makedirs(raw, exist_ok=True); os.makedirs(out, exist_ok=True)
@@ -67,13 +84,13 @@ def main(src, out):
             dst = os.path.join(case_dir, os.path.basename(p))
             if not os.path.exists(dst):
                 os.symlink(os.path.abspath(p), dst)
-        process_subject(case_dir, f"Case{cid}", out)
+        (process_subject if mode == "crop" else process_subject_resize)(case_dir, f"Case{cid}", out)
         n += 1
     mats = glob.glob(os.path.join(out, "*.mat"))
     print(f"\nprocessed {n} subjects -> {len(mats)} slices in {out}")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        sys.exit(__doc__)
-    main(sys.argv[1], sys.argv[2])
+    if len(sys.argv) not in (3, 4):
+        sys.exit(__doc__ + "\n  optional 3rd arg: crop (default) | resize")
+    main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else "crop")

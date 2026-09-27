@@ -69,9 +69,17 @@ from eval_tta import (resample_slice, remap_mnm, remap_lvquant,   # noqa: E402
                       center_crop, find_crop_center)
 
 
-def load_mnm_dir(data_dir: str, crop_size: int = 256) -> "OrderedDict[str, List[Slice]]":
+def resize_slice(img, lbl, size=256):
+    """Paper-text preprocessing: whole slice resized to size x size (no crop)."""
+    from scipy.ndimage import zoom
+    f = (size / img.shape[0], size / img.shape[1])
+    return zoom(img, f, order=3), zoom(lbl.astype(float), f, order=0).astype(int)
+
+
+def load_mnm_dir(data_dir: str, crop_size: int = 256, preproc: str = "crop") -> "OrderedDict[str, List[Slice]]":
     """M&Ms raw: <patient>/<patient>_sa.nii.gz + _sa_gt.nii.gz (H,W,S,T).
-    One case per labeled frame (ED/ES), slices in z order. Mirrors eval_mnm_tta."""
+    One case per labeled frame (ED/ES), slices in z order. Mirrors eval_mnm_tta.
+    preproc='crop' (Nicole: 1mm resample + centroid crop) or 'resize' (whole slice -> 256x256)."""
     import nibabel as nib
     cases: Dict[str, List[Slice]] = OrderedDict()
     for patient in sorted(p for p in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, p))):
@@ -83,10 +91,14 @@ def load_mnm_dir(data_dir: str, crop_size: int = 256) -> "OrderedDict[str, List[
         for t in [t for t in range(gt_vol.shape[3]) if len(np.unique(gt_vol[:, :, :, t])) > 1]:
             case = f"{patient}_t{t:02d}"
             for s in range(img_vol.shape[2]):
-                img_r, gt_r = resample_slice(img_vol[:, :, s, t], pixdim, label=gt_vol[:, :, s, t])
-                img_r = im_normalize(img_r)
-                gt_r = remap_mnm(gt_r)
-                img_c, gt_c = crop_to_centroid(img_r, gt_r, crop_size=crop_size)
+                if preproc == "resize":
+                    img_c, gt_c = resize_slice(img_vol[:, :, s, t], remap_mnm(gt_vol[:, :, s, t]), crop_size)
+                    img_c = im_normalize(img_c)
+                else:
+                    img_r, gt_r = resample_slice(img_vol[:, :, s, t], pixdim, label=gt_vol[:, :, s, t])
+                    img_r = im_normalize(img_r)
+                    gt_r = remap_mnm(gt_r)
+                    img_c, gt_c = crop_to_centroid(img_r, gt_r, crop_size=crop_size)
                 cases.setdefault(case, []).append(Slice(f"{case}_s{s:02d}", case, img_c, gt_c))
     return cases
 
