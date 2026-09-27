@@ -59,6 +59,7 @@ def run_baseline(name, seg, en, cases, args):
             res = tw.adapt.adapt_batch(seg, en, torch.cat([s.tensor() for s in chunk], 0),
                                        num_iterations=args.num_iterations, lr=args.lr, device=args.device)
             for s, r in zip(chunk, res):
+                if args.energy_mask: r.pred = tw.adapt.energy_mask_pred(r.probs.to(args.device), en)
                 d, i, a = (tw.compute_dice(r.pred, s.label), tw.compute_iou(r.pred, s.label),
                            tw.compute_asd(r.pred, s.label))
                 dice.append(d); iou.append(i); asd.append(a)
@@ -80,6 +81,8 @@ def run_baseline(name, seg, en, cases, args):
                                    prev_conf=prev_conf, num_iterations=args.num_iterations,
                                    lr=args.lr, device=args.device)
                 prev_img, prev_label, prev_conf = s.image, r.pred.astype(np.uint8), r.confidence
+            if args.energy_mask and cfg is not None:
+                r.pred = tw.adapt.energy_mask_pred(r.probs.to(args.device), en)
             d, i, a = (tw.compute_dice(r.pred, s.label), tw.compute_iou(r.pred, s.label),
                        tw.compute_asd(r.pred, s.label))
             dice.append(d); iou.append(i); asd.append(a)
@@ -103,6 +106,8 @@ def main():
     p.add_argument("--num_iterations", type=int, default=10)
     p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--energy_mask", action="store_true",
+                   help="apply run_pttea.py's energy-score patch mask to adapted predictions (pred_mask)")
     p.add_argument("--batch_size", type=int, default=1,
                    help="pttea only: adapt this many consecutive slices jointly (run_pttea.py style). 1 = per slice.")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -139,7 +144,7 @@ def main():
     md = "\n".join(lines)
     open(os.path.join(out, "RESULTS.md"), "w").write(
         f"# Results\n\ndata: `{args.data}`  seg: `{args.seg_ckpt}`  energy: `{args.energy_ckpt}`  "
-        f"iters={args.num_iterations} lr={args.lr} batch_size={args.batch_size} device={args.device}\n\n{md}\n")
+        f"iters={args.num_iterations} lr={args.lr} batch_size={args.batch_size} energy_mask={args.energy_mask} device={args.device}\n\n{md}\n")
     print("\n" + md)
     if args.dataset in ("mnm", "lvquant", "myops"):
         ref = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

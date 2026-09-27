@@ -229,3 +229,15 @@ def adapt_batch(seg_model_base, energy_model, images: torch.Tensor, *,
                                confidence=p.max(dim=1)[0].cpu().numpy()[0],
                                losses=losses, iters_run=num_iterations))
     return out
+
+
+def energy_mask_pred(probs: torch.Tensor, energy_model: nn.Module, threshold: float = 0.5) -> np.ndarray:
+    """run_pttea.py's `pred_mask`: score each 16x16 patch with the energy model,
+    upsample sigmoid(score) bilinearly to image size, zero the class probabilities
+    where score < threshold (those pixels fall to background), then argmax.
+    probs: (1,C,H,W). Returns (H,W) int."""
+    with torch.no_grad():
+        score = torch.sigmoid(energy_model(probs))
+        up = torch.nn.functional.interpolate(score, size=probs.shape[-2:], mode="bilinear", align_corners=False)
+        masked = probs * (up >= threshold)
+    return masked.argmax(dim=1).cpu().numpy()[0]

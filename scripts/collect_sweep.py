@@ -7,11 +7,12 @@ rows = []
 for d in sorted(glob.glob(f"results/sweep_{ds}_b*_lr*")):
     f = os.path.join(d, "metrics.json")
     if not os.path.exists(f): continue
-    m = json.load(open(f))["metrics"]; bs, lr = re.search(r"_b(\d+)_lr(\S+)$", d).groups()
+    mm = re.search(r"_b(\d+)_lr([^_]+)(_em)?$", d); bs, lr, em = mm.group(1), mm.group(2), "yes" if mm.group(3) else "no"
+    m = json.load(open(f))["metrics"]
     for k in ("no_adapt", "pttea"):
         if k in m:
             e, my = m[k]["per_class"]["Endo/LV"], m[k]["per_class"]["Myocardium"]
-            rows.append((k, bs, lr, 100*e["dice"], e["asd"], 100*my["dice"], my["asd"]))
+            rows.append((k, bs, lr + ("+mask" if em == "yes" else ""), 100*e["dice"], e["asd"], 100*my["dice"], my["asd"]))
 print(f"| run | batch | lr | LV DSC | LV ASD | Myo DSC | Myo ASD |\n|---|---|---|---|---|---|---|")
 seen = set()
 for r in rows:
