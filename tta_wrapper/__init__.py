@@ -10,3 +10,5 @@ from .adapt import (configure_model_for_tent, adapt_slice, adapt_slice_repo,  # 
 from .models import load_seg_model, load_energy_model  # noqa: F401
 from .data import load_mat_dir, load_mat_slice, Slice  # noqa: F401
 from .metrics import compute_dice, compute_iou, compute_asd, summarize  # noqa: F401
+
+from .interface import PTTEA  # noqa: F401

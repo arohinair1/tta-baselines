@@ -90,6 +90,7 @@ def adapt_slice(seg_model_base: nn.Module,
                 energy_model: nn.Module,
                 image: torch.Tensor,
                 *,
+		loss_fn=tta_loss,
                 strategy: str = "hard",
                 prev_img: Optional[np.ndarray] = None,
                 prev_label: Optional[np.ndarray] = None,
@@ -132,7 +133,7 @@ def adapt_slice(seg_model_base: nn.Module,
     for _ in range(num_iterations):
         opt.zero_grad()
         logits = model(image)
-        parts = tta_loss(logits, energy_model, strategy=strategy,
+        parts = loss_fn(logits, energy_model, strategy=strategy,
                          warped_label=warped_t, pixel_weights=weights_t)
         res.losses.append(parts.as_floats())
         last_probs = torch.softmax(logits, dim=1).detach()
