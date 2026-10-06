@@ -79,6 +79,7 @@ def run_baseline(name, seg, en, cases, args):
                 r = tw.predict_no_adapt(seg, x, device=args.device)
             else:
                 strategy, variant, reg = cfg
+                if args.registration and strategy in ("hard", "confidence"): reg = args.registration
                 r = tw.adapt_slice(seg, en, x, strategy=strategy, variant=variant,
                                    registration=reg, prev_img=prev_img, prev_label=prev_label,
                                    prev_conf=prev_conf, num_iterations=args.num_iterations,
@@ -111,6 +112,11 @@ def main():
     p.add_argument("--num_iterations", type=int, default=10)
     p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--registration", default=None, choices=["demons", "affine", "vxm"],
+                   help="override the registration used by the pseudolabel baselines (pl_*)")
+    p.add_argument("--flow_ckpt", default=None, help="AdaCS motion_XXXX.pt (required for --registration vxm)")
+    p.add_argument("--flow_cache", default=None, help="npz of precomputed flows to load/save")
+    p.add_argument("--cases", nargs="*", default=None, help="restrict to these case ids (e.g. the registration holdout)")
     p.add_argument("--preproc", default="crop", choices=["crop", "resize"],
                    help="mnm only: 'crop' = 1mm resample + 256 crop at myo centroid (Nicole); 'resize' = whole slice resized to 256x256 (paper text)")
     p.add_argument("--energy_mask", action="store_true",
@@ -127,7 +133,13 @@ def main():
     en = tw.load_energy_model(args.energy_ckpt, args.device)
     cases = tw.data.LOADERS[args.dataset](args.data, preproc=args.preproc) if args.dataset == "mnm" \
         else tw.data.LOADERS[args.dataset](args.data)
+    if args.cases:
+        cases = {k: v for k, v in cases.items() if k in set(args.cases)}
     print(f"{len(cases)} cases, {sum(len(v) for v in cases.values())} slices from {args.data}")
+    if args.registration == "vxm":
+        from tta_wrapper import flow as F
+        tw.adapt.REGISTRATION["vxm"] = F.FlowRegistrar(os.path.expanduser(args.flow_ckpt), device=args.device,
+                                                        cache_file=args.flow_cache and os.path.expanduser(args.flow_cache))
 
     metrics, all_rows, all_losses = {}, [], {}
     for name in args.only:
@@ -139,6 +151,7 @@ def main():
               f"myo={pc['Myocardium']['dice']:.4f}  ASD myo={pc['Myocardium']['asd']:.3f}  "
               f"| per-volume Dice endo={v[1]:.4f} myo={v[2]:.4f}  ({m['seconds']}s)")
 
+    if args.registration == "vxm" and args.flow_cache: tw.adapt.REGISTRATION["vxm"].save_cache()
     json.dump({"args": vars(args), "metrics": metrics}, open(os.path.join(out, "metrics.json"), "w"), indent=2)
     json.dump(all_losses, open(os.path.join(out, "losses.json"), "w"))
     with open(os.path.join(out, "per_slice.csv"), "w", newline="") as f:
@@ -153,7 +166,7 @@ def main():
     md = "\n".join(lines)
     open(os.path.join(out, "RESULTS.md"), "w").write(
         f"# Results\n\ndata: `{args.data}`  seg: `{args.seg_ckpt}`  energy: `{args.energy_ckpt}`  "
-        f"iters={args.num_iterations} lr={args.lr} batch_size={args.batch_size} energy_mask={args.energy_mask} device={args.device}\n\n{md}\n")
+        f"registration={args.registration or 'per-baseline default'} iters={args.num_iterations} lr={args.lr} batch_size={args.batch_size} energy_mask={args.energy_mask} device={args.device}\n\n{md}\n")
     print("\n" + md)
     if args.dataset in ("mnm", "lvquant", "myops"):
         ref = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

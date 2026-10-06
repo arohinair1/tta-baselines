@@ -4,3 +4,6 @@
 [submodule "external/pseudolabel"]
 	path = external/pseudolabel
 	url = https://github.com/26nicolet/pseudolabel.git
+[submodule "external/AdaCS"]
+	path = external/AdaCS
+	url = https://github.com/Voldemort108X/AdaCS.git

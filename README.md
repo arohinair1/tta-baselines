@@ -152,3 +152,24 @@ the file and both reproducible via `variant=`.
 
 Once those are in hand: `python scripts/reproduce.py --data /path/to/ACDC/test --seg_ckpt ... --energy_ckpt ... --device cuda`
 runs the same seven baselines on the full test set.
+
+## Week 3: learned registration for pseudolabels (AdaCS / VoxelMorph)
+
+`external/AdaCS` (Zhang et al., ECCV 2024) is a third unmodified submodule. Its
+`VxmDense` network maps (previous slice, current slice) to a displacement field
+`D_{t-1->t}` and `SpatialTransformer` (`models/voxelmorph/torch/layers.py`) warps
+the previous prediction with it: `Y~_t = Warp(Y^_{t-1}, D_{t-1->t})`. No pretrained
+weights are shipped, so the model is trained once, unsupervised, on MyoPS.
+
+```
+tta_wrapper/flow.py            FlowRegistrar: estimate_flow(prev, curr) -> (2,H,W); warp(); same
+                               call signature as Nicole's demons/affine so it plugs into adapt.REGISTRATION
+scripts/prep_myops_pairs.py    processed MyoPS slices -> adjacent-slice pairs in AdaCS's .mat format
+                               (train/ for registration training, holdout/ never seen by it)
+bash/adacs_train.sh            Slurm job that runs upstream train_vxm.py UNCHANGED via a sandbox of symlinks
+scripts/_compat_run.py         runs an upstream script with the py3.11/torch compat patches
+scripts/eval_registration.py   Dice(warp(GT_{t-1}), GT_t) for identity / demons / affine / vxm + overlays
+scripts/reproduce.py --registration vxm --flow_ckpt ...   use the learned flow inside the TTA baselines
+```
+
+Extra deps: `neurite pystrum packaging` (wrapper) and `wandb` (training script only; run offline).

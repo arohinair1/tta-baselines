@@ -9,3 +9,7 @@ nibabel
 tensorboard
 tqdm
 pytest
+
+neurite
+pystrum
+packaging
