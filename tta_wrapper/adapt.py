@@ -50,6 +50,18 @@ REGISTRATION = {
 }
 
 
+def _accepts(fn, kwargs: dict) -> bool:
+    """True if fn takes every key in kwargs (or **kwargs)."""
+    import inspect
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return True
+    if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return True
+    return all(k in params for k in kwargs)
+
+
 def configure_model_for_tent(model: nn.Module) -> nn.Module:
     """TENT-style: freeze everything, train only BatchNorm2d affine params,
     and force BN to use batch statistics (running stats removed).
@@ -148,10 +160,12 @@ def adapt_slice(seg_model_base: nn.Module,
     for _ in range(num_iterations):
         opt.zero_grad()
         logits = model(image)
+        extra = dict(lambda_e=lambda_e, lambda_p=lambda_p, pl_kind=pl_kind,
+                     lambda_mode=lambda_mode, gce_q=gce_q)
+        if not _accepts(loss_fn, extra):   # custom loss_fn with the plain signature
+            extra = {}
         parts = loss_fn(logits, energy_model, strategy=strategy,
-                        warped_label=warped_t, pixel_weights=weights_t,
-                        lambda_e=lambda_e, lambda_p=lambda_p, pl_kind=pl_kind,
-                        lambda_mode=lambda_mode, gce_q=gce_q)
+                        warped_label=warped_t, pixel_weights=weights_t, **extra)
         res.losses.append(parts.as_floats())
         last_probs = torch.softmax(logits, dim=1).detach()
         parts.total.backward()
