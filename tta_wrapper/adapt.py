@@ -101,17 +101,32 @@ def adapt_slice(seg_model_base: nn.Module,
                 variant: str = "eval_tta",
                 min_delta: float = 1e-4,
                 patience: int = 3,
-                device="cpu") -> SliceResult:
-    """Adapt a fresh copy of seg_model_base on ONE image (1,1,H,W) and predict.
+                device="cpu",
+                lambda_e: float = 1.0,
+                lambda_p: float = 1.0,
+                pl_kind: str = "ce",
+                lambda_mode: str = "fixed",
+                gce_q: float = 0.7,
+                state: Optional[dict] = None) -> SliceResult:
+    """Adapt seg_model_base on ONE image (1,1,H,W) and predict.
 
     strategy   : 'none' | 'hard' | 'confidence' | 'entropy'
     variant    : 'eval_tta' (early stop + final forward) or 'pttea'
                  (fixed iterations, prediction from last iteration's forward)
+    lambda_e, lambda_p, pl_kind, lambda_mode, gce_q : see losses.tta_loss
+    state      : None -> fresh deep copy of the model per slice (repo behaviour);
+                 a dict {'model','opt'} -> continue adapting that model (sequential,
+                 state carried along the slice sequence). Updated in place.
     """
     assert variant in ("eval_tta", "pttea")
     image = image.to(device)
-    model = configure_model_for_tent(copy.deepcopy(seg_model_base)).to(device)
-    opt = torch.optim.Adam([p for p in model.parameters() if p.requires_grad], lr=lr)
+    if state is not None and "model" in state:
+        model, opt = state["model"], state["opt"]; model.train()
+    else:
+        model = configure_model_for_tent(copy.deepcopy(seg_model_base)).to(device)
+        opt = torch.optim.Adam([p for p in model.parameters() if p.requires_grad], lr=lr)
+        if state is not None:
+            state["model"], state["opt"] = model, opt
 
     # pseudolabel preparation
     warped_t = None
@@ -134,7 +149,9 @@ def adapt_slice(seg_model_base: nn.Module,
         opt.zero_grad()
         logits = model(image)
         parts = loss_fn(logits, energy_model, strategy=strategy,
-                         warped_label=warped_t, pixel_weights=weights_t)
+                        warped_label=warped_t, pixel_weights=weights_t,
+                        lambda_e=lambda_e, lambda_p=lambda_p, pl_kind=pl_kind,
+                        lambda_mode=lambda_mode, gce_q=gce_q)
         res.losses.append(parts.as_floats())
         last_probs = torch.softmax(logits, dim=1).detach()
         parts.total.backward()
@@ -180,14 +197,18 @@ def adapt_slice_repo(seg_model_base, energy_model, image, *, strategy="hard",
                        iters_run=actual_iters)
 
 
-def adapt_sequence(seg_model_base, energy_model, images: List[torch.Tensor], **kw) -> List[SliceResult]:
+def adapt_sequence(seg_model_base, energy_model, images: List[torch.Tensor],
+                   carry_state: bool = False, **kw) -> List[SliceResult]:
     """Run adapt_slice over an ordered list of slices from one case, feeding
     each prediction forward as the next slice's pseudolabel source.
-    (This is the per-case loop of eval_tta.eval_*_tta.)"""
+    (This is the per-case loop of eval_tta.eval_*_tta.)
+    carry_state=True keeps ONE adapted model across the whole sequence
+    (sequential adaptation) instead of resetting to the source model per slice."""
     results = []
     prev_img = prev_label = prev_conf = None
+    state = {} if carry_state else None
     for x in images:
-        r = adapt_slice(seg_model_base, energy_model, x,
+        r = adapt_slice(seg_model_base, energy_model, x, state=state,
                         prev_img=prev_img, prev_label=prev_label, prev_conf=prev_conf, **kw)
         results.append(r)
         prev_img = x[0, 0].detach().cpu().numpy()

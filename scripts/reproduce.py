@@ -51,6 +51,8 @@ def run_baseline(name, seg, en, cases, args):
     dice, iou, asd, rows, losses = [], [], [], [], []
     pc_pred, pc_lbl = {}, {}
     t0 = time.time()
+    adapt_kw = dict(lambda_e=args.lambda_e, lambda_p=args.lambda_p, pl_kind=args.pl_kind,
+                    lambda_mode=args.lambda_mode, gce_q=args.gce_q)
     if name == "pttea" and args.batch_size > 1:
         # run_pttea.py style: batches of consecutive slices adapted jointly
         flat = [s for v in cases.values() for s in v]
@@ -72,6 +74,7 @@ def run_baseline(name, seg, en, cases, args):
         return summary, rows, []
     for case, slices in cases.items():
         prev_img = prev_label = prev_conf = None
+        state = {} if (args.carry_state and cfg is not None) else None
         for s in slices:
             x = s.tensor()
             torch.manual_seed(args.seed)
@@ -83,7 +86,7 @@ def run_baseline(name, seg, en, cases, args):
                 r = tw.adapt_slice(seg, en, x, strategy=strategy, variant=variant,
                                    registration=reg, prev_img=prev_img, prev_label=prev_label,
                                    prev_conf=prev_conf, num_iterations=args.num_iterations,
-                                   lr=args.lr, device=args.device)
+                                   lr=args.lr, device=args.device, state=state, **adapt_kw)
                 prev_img, prev_label, prev_conf = s.image, r.pred.astype(np.uint8), r.confidence
             if args.energy_mask and cfg is not None:
                 r.pred = tw.adapt.energy_mask_pred(r.probs.to(args.device), en)
@@ -112,6 +115,14 @@ def main():
     p.add_argument("--num_iterations", type=int, default=10)
     p.add_argument("--lr", type=float, default=0.01)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--lambda_e", type=float, default=1.0, help="weight on the energy loss")
+    p.add_argument("--lambda_p", type=float, default=1.0, help="weight on the pseudolabel loss")
+    p.add_argument("--pl_kind", default="ce", choices=["ce", "gce"], help="pseudolabel consistency loss")
+    p.add_argument("--gce_q", type=float, default=0.7)
+    p.add_argument("--lambda_mode", default="fixed", choices=["fixed", "energy"],
+                   help="energy: lambda_p scaled by 2*(1 - mean sigmoid energy score) each iteration")
+    p.add_argument("--carry_state", action="store_true",
+                   help="sequential adaptation: keep one adapted model across a case's slices instead of resetting")
     p.add_argument("--registration", default=None, choices=["demons", "affine", "vxm"],
                    help="override the registration used by the pseudolabel baselines (pl_*)")
     p.add_argument("--flow_ckpt", default=None, help="AdaCS motion_XXXX.pt (required for --registration vxm)")
@@ -166,7 +177,7 @@ def main():
     md = "\n".join(lines)
     open(os.path.join(out, "RESULTS.md"), "w").write(
         f"# Results\n\ndata: `{args.data}`  seg: `{args.seg_ckpt}`  energy: `{args.energy_ckpt}`  "
-        f"registration={args.registration or 'per-baseline default'} iters={args.num_iterations} lr={args.lr} batch_size={args.batch_size} energy_mask={args.energy_mask} device={args.device}\n\n{md}\n")
+        f"lambda_e={args.lambda_e} lambda_p={args.lambda_p} pl_kind={args.pl_kind} lambda_mode={args.lambda_mode} carry_state={args.carry_state} registration={args.registration or 'per-baseline default'} iters={args.num_iterations} lr={args.lr} batch_size={args.batch_size} energy_mask={args.energy_mask} device={args.device}\n\n{md}\n")
     print("\n" + md)
     if args.dataset in ("mnm", "lvquant", "myops"):
         ref = json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
