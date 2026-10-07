@@ -51,7 +51,7 @@ def vxm():
 
 def load_flow_model(ckpt: str, device="cpu"):
     """Load a VxmDense checkpoint written by AdaCS train_vxm.py (motion_XXXX.pt)."""
-    m = vxm().networks.VxmDense.load(ckpt, device)
+    m = vxm().networks.VxmDense.load(ckpt, device).to(device)
     m.eval()
     for p in m.parameters():
         p.requires_grad_(False)
