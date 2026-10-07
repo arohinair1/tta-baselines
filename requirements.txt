@@ -13,3 +13,4 @@ pytest
 neurite
 pystrum
 packaging
+scikit-image
