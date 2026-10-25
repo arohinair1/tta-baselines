@@ -170,6 +170,8 @@ bash/adacs_train.sh            Slurm job that runs upstream train_vxm.py UNCHANG
 scripts/_compat_run.py         runs an upstream script with the py3.11/torch compat patches
 scripts/eval_registration.py   Dice(warp(GT_{t-1}), GT_t) for identity / demons / affine / vxm + overlays
 scripts/reproduce.py --registration vxm --flow_ckpt ...   use the learned flow inside the TTA baselines
+scripts/diagnose_flow.py       direction / interpolation / reconstruction-error / overfit checks on the flow
+                               (writes DIAGNOSIS.md + per-pair figures; see its docstring)
 ```
 
 Extra deps: `neurite pystrum packaging` (wrapper) and `wandb` (training script only; run offline).
