@@ -190,7 +190,7 @@ def evaluate(reg: Vxm, pairs, tag, out, n_vis, with_demons=False):
         add("rev  model(curr,prev), warp prev", label_scores(wl, lc), recon_stats(wi, curr, lc), wl)
         # wrong direction 3: negated swapped flow
         wi = reg.warp(prev, -f_rev, nearest=False); wl = reg.warp(lp, -f_rev, nearest=True).astype(np.uint8)
-        add("-rev model(curr,prev), warp prev with -flow", label_scores(wl, lc), recon_stats(wi, curr, lc), wl)
+        add("bwd  model(curr,prev), warp prev with -flow  [same direction: model's backward branch]", label_scores(wl, lc), recon_stats(wi, curr, lc), wl)
         # sanity: warping curr with f_rev should reproduce prev (symmetric use)
         wi = reg.warp(curr, f_rev, nearest=False); wl = reg.warp(lc, f_rev, nearest=True).astype(np.uint8)
         add("sym  model(curr,prev), warp curr -> prev", label_scores(wl, lp), recon_stats(wi, prev, lp), wl)
@@ -328,7 +328,8 @@ def main():
     md = [f"# Flow diagnostics  ({len(pairs)} pairs, {args.pairs}, ckpt={args.flow_ckpt})", "",
           "Dice/IoU: warp(GT_prev) vs GT_curr. img MSE: warp(prev) vs curr (identity = prev vs curr).",
           "'err on edges' = fraction of squared image error within 3 px of a GT_curr boundary (edge band covers 'edge_area_frac' of the image).",
-          "The 'fwd' row is exactly what tta_wrapper/flow.py does. If 'neg' or 'rev' beats it, the direction is wrong.", ""]
+          "The 'fwd' row is exactly what tta_wrapper/flow.py does. If 'neg' or 'rev' beats it, the direction is wrong.",
+          "'bwd' is -flow from model(curr, prev): for a bidirectional model this is a second estimate of the SAME direction as 'fwd', not a flip.", ""]
     results = {}
 
     print("\n== checks 1-3 (+5): trained model ==")
@@ -352,7 +353,8 @@ def main():
     best_lbl = max((k for k in tr if not k.startswith("_")), key=lambda k: np.nan_to_num(tr[k]["Myo"], nan=-1))
     v.append(f"- image reconstruction: identity MSE {tr['identity']['mse']:.4f} -> fwd {tr[fwd]['mse']:.4f}; best variant by MSE: '{best_img}'")
     v.append(f"- labels: identity Myo {tr['identity']['Myo']:.2f} -> fwd {tr[fwd]['Myo']:.2f}; best variant by Myo Dice: '{best_lbl}'")
-    learned = [k for k in tr if not k.startswith("_") and "mse" in tr[k] and k not in ("identity", fwd) and not k.startswith("demons") and not k.startswith("sym")]
+    # only the genuinely flipped variants count; 'bwd' is the model's own estimate of the SAME direction
+    learned = [k for k in tr if k.startswith("neg ") or k.startswith("rev ")]
     flipped_better = [k for k in learned if tr[k]["mse"] < tr[fwd]["mse"] - 1e-5 or np.nan_to_num(tr[k]["Myo"], nan=-1) > tr[fwd]["Myo"] + 0.5]
     v.append("- DIRECTION " + (f"LOOKS WRONG: {flipped_better} beat the wrapper's direction." if flipped_better
                                else "OK: no flipped variant beats the wrapper's direction (fwd)."))
