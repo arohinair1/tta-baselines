@@ -212,6 +212,35 @@ def evaluate(reg: Vxm, pairs, tag, out, n_vis, with_demons=False):
     return summary, figs
 
 
+def crop_and_background_check(reg: "Vxm", pairs):
+    """Where is the flow? Per pair: GT myocardium centroid of prev and curr (per-slice centroid
+    cropping puts both at ~(128,128)), mean |flow| in background vs heart, and the median
+    background displacement. Also what the labels do if the flow is decomposed into its global
+    background translation and the residual."""
+    lines = ["### Crop / background check", "",
+             "| pair | centroid prev | centroid curr | mean flow bg (px) | mean flow heart (px) | median bg flow (dy,dx) |", "|---|---|---|---|---|---|"]
+    agg = {"identity": [], "full flow": [], "translation only": [], "flow minus translation": []}
+    for p in pairs:
+        prev, curr, lp, lc = p["prev"], p["curr"], p["lprev"], p["lcurr"]
+        ca, cb = ndi.center_of_mass(lp == 2), ndi.center_of_mass(lc == 2)
+        f = reg.flow(prev, curr); mag = np.hypot(f[0], f[1])
+        heart = ndi.binary_dilation(lc > 0, iterations=10); bg = ~ndi.binary_dilation(lc > 0, iterations=40)
+        tr = np.array([np.median(f[0][bg]), np.median(f[1][bg])], np.float32)
+        lines.append(f"| {p['name']} | ({ca[0]:.1f},{ca[1]:.1f}) | ({cb[0]:.1f},{cb[1]:.1f}) | {mag[bg].mean():.1f} | {mag[heart].mean():.1f} | ({tr[0]:+.1f},{tr[1]:+.1f}) |")
+        f_tr = np.zeros_like(f); f_tr[0] += tr[0]; f_tr[1] += tr[1]
+        f_res = f - tr[:, None, None]
+        for k, ff in (("full flow", f), ("translation only", f_tr), ("flow minus translation", f_res)):
+            wi = reg.warp(prev, ff, nearest=False); wl = reg.warp(lp, ff, nearest=True).astype(np.uint8)
+            agg[k].append((((wi - curr) ** 2).mean(), ((wi - curr) ** 2)[heart].mean(), 100 * dice(wl, lc, 2)))
+        agg["identity"].append((((prev - curr) ** 2).mean(), ((prev - curr) ** 2)[heart].mean(), 100 * dice(lp, lc, 2)))
+    lines += ["", "| variant | img MSE | MSE in heart | Myo Dice |", "|---|---|---|---|"]
+    for k, v in agg.items():
+        v = np.mean(v, 0); lines.append(f"| {k} | {v[0]:.4f} | {v[1]:.4f} | {v[2]:.2f} |")
+    lines += ["", "If both centroids are ~(128,128) in every pair, each slice was cropped around its own GT centroid: the hearts are",
+              "pre-aligned and the inter-slice shift lives in the background, which is then what the flow model learns to move."]
+    return "\n".join(lines)
+
+
 def save_fig(out, name, prev, curr, warped, wl, lc, flow):
     import matplotlib; matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -336,6 +365,7 @@ def main():
     s, figs = evaluate(Vxm(model, dev), pairs, "trained", args.out, args.n_vis, with_demons=not args.no_demons)
     results["trained"] = s
     t = fmt_table(s, "Trained flow model (as used in the TTA loop)"); print(t); md += [t, ""]
+    t = crop_and_background_check(Vxm(model, dev), pairs); print("\n" + t); md += [t, ""]
 
     if args.overfit_steps > 0:
         print(f"\n== check 4: overfit on these {len(pairs)} pairs ({args.overfit_steps} steps, lr {args.overfit_lr}, lambda {args.overfit_lambda}) ==")
