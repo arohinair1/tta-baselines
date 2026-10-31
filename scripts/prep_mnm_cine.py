@@ -63,12 +63,17 @@ def process_patient(pdir: str, patient: str, crop: int, min_myo: int):
         _, g_es_r = resample_slice(img[:, :, z, es], pixdim, label=g_es)
         c_ed, c_es = find_crop_center(g_ed_r, 2), find_crop_center(g_es_r, 2)
         centre = ((c_ed[0] + c_es[0]) // 2, (c_ed[1] + c_es[1]) // 2)      # ONE centre for all frames
-        frames = []
+        frames, l_ed, l_es = [], None, None
         for t in range(img.shape[3]):
-            f_r = im_normalize(resample_slice(img[:, :, z, t], pixdim))
-            frames.append(center_crop(f_r, crop, center=centre).astype(np.float32))
-        _, l_ed = center_crop(frames[ed], crop, label=g_ed_r, center=centre)
-        _, l_es = center_crop(frames[es], crop, label=g_es_r, center=centre)
+            f_r = im_normalize(resample_slice(img[:, :, z, t], pixdim))      # full-size resampled frame
+            if t == ed:
+                f_c, l_ed = center_crop(f_r, crop, label=g_ed_r, center=centre)   # crop image AND label from the same full-size window
+            elif t == es:
+                f_c, l_es = center_crop(f_r, crop, label=g_es_r, center=centre)
+            else:
+                f_c = center_crop(f_r, crop, center=centre)
+            frames.append(f_c.astype(np.float32))
+        assert (l_ed == 2).any() and (l_es == 2).any()
         out.append(dict(name=f"{patient}_s{z:02d}", frames=np.stack(frames), ed=ed, es=es,
                         lbl_ED=l_ed.astype(np.uint8), lbl_ES=l_es.astype(np.uint8)))
     return out
