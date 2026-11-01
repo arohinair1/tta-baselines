@@ -49,6 +49,7 @@ from tta_wrapper.metrics import compute_dice  # noqa: E402
 SETTINGS = {
     #            strategy  lambda_e lambda_p
     "no_adapt": None,
+    "bn_only":  ("none", 0.0, 0.0),   # TENT-mode BatchNorm (batch statistics), zero loss: isolates the BN effect
     "energy":   ("none", 1.0, 0.0),
     "pl":       ("hard", 0.0, 1.0),
     "energy_pl": ("hard", 1.0, 1.0),
@@ -90,6 +91,7 @@ def run_sequence(name, seg, en, reg: F.FlowRegistrar, frames, path, lbl_start, l
             e_before = e_after = float("nan"); pl_loss = float("nan"); iters = 0
         else:
             strategy, le, lp = cfg
+            lp = lp * args.lambda_p
             r = tw.adapt.adapt_slice(seg, en, x, strategy=strategy if prev_lbl is not None else "none",
                                      prev_img=prev_img, prev_label=prev_lbl, registration="vxm",
                                      num_iterations=args.num_iterations, lr=args.lr, variant="eval_tta",
@@ -139,7 +141,8 @@ def main():
     a.add_argument("--seg_ckpt", default=None); a.add_argument("--energy_ckpt", default=None)
     a.add_argument("--out", default="results/cine_tta")
     a.add_argument("--device", default="cpu")
-    a.add_argument("--settings", nargs="+", default=list(SETTINGS))
+    a.add_argument("--settings", nargs="+", default=["no_adapt", "bn_only", "energy", "pl", "energy_pl"])
+    a.add_argument("--lambda_p", type=float, default=1.0, help="pseudolabel weight for the pl / energy_pl settings")
     a.add_argument("--stride", type=int, default=5)
     a.add_argument("--directions", default="ed2es", choices=["both", "ed2es", "es2ed"])
     a.add_argument("--start", default="pred", choices=["pred", "gt"])
@@ -189,7 +192,7 @@ def main():
     # summary
     md = [f"# Sequential TTA over cine frames  ({len(files)} slices, {args.frames})",
           f"stride {args.stride}, start={args.start}, trust={args.trust}, carry_state={args.carry_state}, energy_mask={args.energy_mask}, "
-          f"lr {args.lr}, {args.num_iterations} iters, pl_kind {args.pl_kind}, lambda_mode {args.lambda_mode}, flow {args.flow_ckpt}", "",
+          f"lr {args.lr}, {args.num_iterations} iters, lambda_p {args.lambda_p}, pl_kind {args.pl_kind}, lambda_mode {args.lambda_mode}, flow {args.flow_ckpt}", "",
           "Dice at the START frame = plain per-frame TTA (no pseudolabel possible yet). Dice at the END frame = after walking the sequence.", "",
           "| setting | start LV | start Myo | end LV (slice) | end Myo (slice) | end LV (vol) | end Myo (vol) | mean disp px | trust % | sec/frame |", "|---|---|---|---|---|---|---|---|---|---|"]
     metrics = {}
