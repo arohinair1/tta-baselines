@@ -119,7 +119,8 @@ def adapt_slice(seg_model_base: nn.Module,
                 pl_kind: str = "ce",
                 lambda_mode: str = "fixed",
                 gce_q: float = 0.7,
-                state: Optional[dict] = None) -> SliceResult:
+                state: Optional[dict] = None,
+                pixel_mask: Optional[np.ndarray] = None) -> SliceResult:
     """Adapt seg_model_base on ONE image (1,1,H,W) and predict.
 
     strategy   : 'none' | 'hard' | 'confidence' | 'entropy'
@@ -129,6 +130,10 @@ def adapt_slice(seg_model_base: nn.Module,
     state      : None -> fresh deep copy of the model per slice (repo behaviour);
                  a dict {'model','opt'} -> continue adapting that model (sequential,
                  state carried along the slice sequence). Updated in place.
+    pixel_mask : optional (H,W) {0,1} / [0,1] weights on the pseudolabel loss, defined on
+                 the CURRENT image grid (e.g. a consistency "trust" mask). Implies the
+                 'confidence' loss form (mean(CE_map * weights)); multiplied with the warped
+                 confidence when strategy == 'confidence'.
     """
     assert variant in ("eval_tta", "pttea")
     image = image.to(device)
@@ -153,6 +158,10 @@ def adapt_slice(seg_model_base: nn.Module,
             warped_t = torch.from_numpy(warped_np).long().to(device).unsqueeze(0)
             if strategy == "confidence" and warped_conf is not None:
                 weights_t = torch.from_numpy(np.clip(warped_conf, 0.0, 1.0)).float().to(device).unsqueeze(0)
+            if pixel_mask is not None:
+                m_t = torch.from_numpy(np.asarray(pixel_mask, np.float32)).to(device).unsqueeze(0)
+                weights_t = m_t if weights_t is None else weights_t * m_t
+                strategy = "confidence"          # tta_loss applies pixel_weights only in this form
 
     res = SliceResult(pred=None, probs=None, confidence=None, warped_label=warped_np)
     best, since_improve = float("inf"), 0

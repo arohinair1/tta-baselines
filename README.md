@@ -171,6 +171,9 @@ scripts/_compat_run.py         runs an upstream script with the py3.11/torch com
 scripts/eval_registration.py   Dice(warp(GT_{t-1}), GT_t) for identity / demons / affine / vxm + overlays
 scripts/reproduce.py --registration vxm --flow_ckpt ...   use the learned flow inside the TTA baselines
 scripts/prep_mnm_cine.py       M&Ms cine -> ED/ES time-frame pairs (AdaCS format) + all-frame sequences, ONE crop per slice
+scripts/prep_mnm_consec_pairs.py consecutive-frame training pairs (NB: diluting ED/ES pairs with these made the model under-shoot)
+scripts/chain_flow.py          chain the flow across frames (--stride), compose, consistency mask, score at the end frame
+scripts/run_cine_tta.py        Week 5: sequential TTA over frames, 4 settings, scored at ED and ES; bash/cine_tta.sh runs it
 scripts/diagnose_flow.py       direction / interpolation / reconstruction-error / overfit checks on the flow
                                (writes DIAGNOSIS.md + per-pair figures; see its docstring)
 ```
