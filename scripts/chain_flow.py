@@ -83,12 +83,15 @@ class Flow:
         return (f_fwd + self.warp(f_bwd, f_fwd, nearest=False)).norm(dim=0)
 
 
-def frame_path(ed, es, T):
-    """indices from ed to es going forward in time (wrapping), inclusive."""
+def frame_path(ed, es, T, stride=1):
+    """indices from ed to es going forward in time (wrapping), inclusive; every `stride`-th
+    frame (the end frame is always kept, so the last step may be shorter)."""
     out, t = [ed], ed
     while t != es:
         t = (t + 1) % T
         out.append(t)
+    if stride > 1:
+        out = out[::stride] + ([out[-1]] if out[-1] not in out[::stride] else [])
     return out
 
 
@@ -138,6 +141,7 @@ def run_sequence(F: Flow, frames, path, lbl_start, lbl_end, tau_fb, tau_cd):
         "acc_untrusted_heart": float(correct[heart & ~tb].mean()) if (heart & ~tb).any() else float("nan"),
         "acc_all_heart": float(correct[heart].mean()) if heart.any() else float("nan"),
         "mean_disp_heart_px": float(Phi.norm(dim=0).cpu().numpy()[gt > 0].mean()) if (gt > 0).any() else float("nan"),
+        "mean_disp_direct_heart_px": float(direct.norm(dim=0).cpu().numpy()[gt > 0].mean()) if (gt > 0).any() else float("nan"),
         "fb_ok_frac_per_step": fb_steps[::-1],
     }
     arrays = dict(pl_chain=pl_chain, pl_direct=pl_direct, trust=tb, fb_err_end=None, cd=cd.cpu().numpy(),
@@ -178,6 +182,7 @@ def main():
     a.add_argument("--max_seqs", type=int, default=0)
     a.add_argument("--n_vis", type=int, default=6)
     a.add_argument("--directions", default="both", choices=["both", "ed2es", "es2ed"])
+    a.add_argument("--stride", type=int, default=1, help="frames per chain step (1 = every frame)")
     args = a.parse_args()
     os.makedirs(args.out, exist_ok=True)
     dev = torch.device(args.device)
@@ -202,9 +207,9 @@ def main():
         T = frames.shape[0]
         runs = []
         if args.directions in ("both", "ed2es"):
-            runs.append(("ed2es", frame_path(ed, es, T), l_ed, l_es))
+            runs.append(("ed2es", frame_path(ed, es, T, args.stride), l_ed, l_es))
         if args.directions in ("both", "es2ed"):
-            runs.append(("es2ed", frame_path(es, ed, T), l_es, l_ed))
+            runs.append(("es2ed", frame_path(es, ed, T, args.stride), l_es, l_ed))
         for dname, path, l0, l1 in runs:
             m, arr = run_sequence(F, frames, path, l0, l1, args.tau_fb, args.tau_cd)
             m.update(seq=os.path.basename(fpath)[:-4], direction=dname)
@@ -221,7 +226,7 @@ def main():
         v = [r[key][idx] if idx is not None else r[key] for r in rows]
         return float(np.nanmean(v))
     md = [f"# Chained flow across frames  ({len(rows)} sequences from {len(files)} slices, {args.frames}, ckpt={args.flow_ckpt})",
-          f"tau_fb={args.tau_fb} px per step, tau_cd={args.tau_cd} px at the end frame. Mean steps per sequence: {mean('n_steps'):.1f}", "",
+          f"stride={args.stride} frames per step, tau_fb={args.tau_fb} px per step, tau_cd={args.tau_cd} px at the end frame. Mean steps per sequence: {mean('n_steps'):.1f}", "",
           "| pseudolabel at the END frame | LV Dice | Myo Dice |", "|---|---|---|",
           f"| identity (start label, no warp) | {mean('dice_identity',0):.2f} | {mean('dice_identity',1):.2f} |",
           f"| direct one-shot warp start->end | {mean('dice_direct',0):.2f} | {mean('dice_direct',1):.2f} |",
@@ -234,7 +239,7 @@ def main():
           f"| pixel accuracy of chained pseudolabel, ALL heart pixels | {100*mean('acc_all_heart'):.1f}% |",
           f"| pixel accuracy on TRUSTED pixels | {100*mean('acc_trusted_heart'):.1f}% |",
           f"| pixel accuracy on UNTRUSTED pixels | {100*mean('acc_untrusted_heart'):.1f}% |",
-          f"| mean displacement inside heart (px) | {mean('mean_disp_heart_px'):.2f} |", "",
+          f"| mean displacement inside heart (px): chained / direct | {mean('mean_disp_heart_px'):.2f} / {mean('mean_disp_direct_heart_px'):.2f} |", "",
           "Per direction:", "", "| direction | n | identity Myo | direct Myo | chain Myo | chain-trusted Myo | trusted % | acc trusted | acc untrusted |", "|---|---|---|---|---|---|---|---|---|"]
     for d in ("ed2es", "es2ed"):
         rs = [r for r in rows if r["direction"] == d]
