@@ -45,12 +45,16 @@ def load_run(run_dir):
     return df
 
 
-def build(df):
-    """per-frame rows -> one row per (run, setting, patient, slice, direction)."""
+def build(df, base_run=None):
+    """per-frame rows -> one row per (run, setting, patient, slice, direction).
+    A run without its own no_adapt arm is differenced against base_run's no_adapt (same slices)."""
     key = ["run", "patient", "slice", "direction"]
+    fallback = df[(df.run == base_run) & (df.setting == "no_adapt")] if base_run else None
     rows = []
     for (run, pat, sl, d), g in df.groupby(key):
         base = g[g.setting == "no_adapt"]
+        if base.empty and fallback is not None:
+            base = fallback[(fallback.patient == pat) & (fallback.slice == sl) & (fallback.direction == d)]
         if base.empty:
             continue
         b0, b1 = base[base.step == 0].iloc[0], base[base.step == base.step.max()].iloc[0]
@@ -114,12 +118,14 @@ def main():
     a = argparse.ArgumentParser()
     a.add_argument("--runs", nargs="+", required=True, help="run dirs containing per_frame.csv (must include a no_adapt setting)")
     a.add_argument("--meta", default=None, help="M&Ms metadata csv")
+    a.add_argument("--base_run", default=None, help="run dir whose no_adapt arm is used for runs that lack one (default: first --runs entry)")
     a.add_argument("--out", default="results/week6")
     args = a.parse_args()
     os.makedirs(args.out, exist_ok=True)
 
     df = pd.concat([load_run(r) for r in args.runs], ignore_index=True)
-    ds = add_meta(build(df), args.meta and os.path.expanduser(args.meta))
+    base_run = os.path.basename((args.base_run or args.runs[0]).rstrip("/"))
+    ds = add_meta(build(df, base_run), args.meta and os.path.expanduser(args.meta))
     ds.to_csv(os.path.join(args.out, "week6_dataset.csv"), index=False)
 
     md = [f"# Week 6 dataset and first regressions", f"runs: {args.runs}", "",

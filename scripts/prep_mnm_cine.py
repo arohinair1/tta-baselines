@@ -42,7 +42,29 @@ from eval_tta import resample_slice, remap_mnm, center_crop, find_crop_center  #
 from dataset import im_normalize  # noqa: E402
 
 
-def process_patient(pdir: str, patient: str, crop: int, min_myo: int):
+_SEG = {}
+
+
+def predicted_centre(img_r, crop, device="cpu"):
+    """centroid of the source model's predicted heart on the full-size resampled ED frame:
+    predict on a centre crop, take the myocardium (else LV) centroid, map back to full-size coords.
+    Falls back to the image centre if nothing is predicted."""
+    import torch
+    import tta_wrapper as tw
+    from scipy import ndimage as ndi
+    if "m" not in _SEG:
+        _SEG["m"] = tw.load_seg_model(device=device)
+    H, W = img_r.shape; cy, cx = H // 2, W // 2
+    c0 = center_crop(img_r, crop, center=(cy, cx))
+    pred = tw.adapt.predict_no_adapt(_SEG["m"], torch.from_numpy(np.asarray(c0, np.float32)[None, None]), device=device).pred
+    for cls in (2, 1):
+        if (pred == cls).sum() >= 20:
+            py, px = ndi.center_of_mass(pred == cls)
+            return (int(round(cy - crop // 2 + py)), int(round(cx - crop // 2 + px)))
+    return (cy, cx)
+
+
+def process_patient(pdir: str, patient: str, crop: int, min_myo: int, crop_from: str = "gt"):
     import nibabel as nib
     img_nii = nib.load(os.path.join(pdir, f"{patient}_sa.nii.gz"))
     gt_nii = nib.load(os.path.join(pdir, f"{patient}_sa_gt.nii.gz"))
@@ -61,8 +83,12 @@ def process_patient(pdir: str, patient: str, crop: int, min_myo: int):
             continue
         _, g_ed_r = resample_slice(img[:, :, z, ed], pixdim, label=g_ed)
         _, g_es_r = resample_slice(img[:, :, z, es], pixdim, label=g_es)
-        c_ed, c_es = find_crop_center(g_ed_r, 2), find_crop_center(g_es_r, 2)
-        centre = ((c_ed[0] + c_es[0]) // 2, (c_ed[1] + c_es[1]) // 2)      # ONE centre for all frames
+        if crop_from == "pred":
+            f_ed_full = im_normalize(resample_slice(img[:, :, z, ed], pixdim))
+            centre = predicted_centre(f_ed_full, crop)                      # no ground truth used
+        else:
+            c_ed, c_es = find_crop_center(g_ed_r, 2), find_crop_center(g_es_r, 2)
+            centre = ((c_ed[0] + c_es[0]) // 2, (c_ed[1] + c_es[1]) // 2)  # ONE centre for all frames (uses GT)
         frames, l_ed, l_es = [], None, None
         for t in range(img.shape[3]):
             f_r = im_normalize(resample_slice(img[:, :, z, t], pixdim))      # full-size resampled frame
@@ -87,6 +113,8 @@ def main():
     a.add_argument("--crop", type=int, default=256)
     a.add_argument("--min_myo", type=int, default=50, help="min myocardium pixels in BOTH ED and ES for a slice to be used")
     a.add_argument("--max_patients", type=int, default=0)
+    a.add_argument("--crop_from", default="gt", choices=["gt", "pred"], help="crop centre from the GT myocardium (upstream protocol) or from the source model's ED prediction (no leak)")
+    a.add_argument("--only_holdout", action="store_true", help="process only the holdout patients")
     args = a.parse_args()
 
     patients = sorted(p for p in os.listdir(args.data) if os.path.isdir(os.path.join(args.data, p)))
@@ -101,8 +129,10 @@ def main():
     n = {"train": 0, "holdout": 0}; skipped = []
     for i, p in enumerate(patients):
         split = "holdout" if p in hold else "train"
+        if args.only_holdout and split != "holdout":
+            continue
         try:
-            slices = process_patient(os.path.join(args.data, p), p, args.crop, args.min_myo)
+            slices = process_patient(os.path.join(args.data, p), p, args.crop, args.min_myo, args.crop_from)
         except Exception as e:  # noqa: BLE001
             skipped.append((p, str(e))); continue
         if not slices:
