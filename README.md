@@ -173,6 +173,8 @@ scripts/reproduce.py --registration vxm --flow_ckpt ...   use the learned flow i
 scripts/prep_mnm_cine.py       M&Ms cine -> ED/ES time-frame pairs (AdaCS format) + all-frame sequences, ONE crop per slice
 scripts/prep_mnm_consec_pairs.py consecutive-frame training pairs (NB: diluting ED/ES pairs with these made the model under-shoot)
 scripts/chain_flow.py          chain the flow across frames (--stride), compose, consistency mask, score at the end frame
+scripts/energy_calibration.py  is the energy model an oracle for pseudolabel quality? (patch energy vs patch IoU against GT)
+scripts/error_saliency.py      error maps + input-gradient saliency at ES, source vs adapted; where the error sits
 scripts/build_week6.py         Week 6: per-sequence dataset (dDice vs energy / displacement / size / vendor) + OLS with patient-clustered SEs
 scripts/run_cine_tta.py        Week 5: sequential TTA over frames, 4 settings, scored at ED and ES; bash/cine_tta.sh runs it
 scripts/diagnose_flow.py       direction / interpolation / reconstruction-error / overfit checks on the flow
