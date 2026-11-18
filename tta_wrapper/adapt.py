@@ -85,6 +85,7 @@ class SliceResult:
     losses: List[dict] = field(default_factory=list)  # per-iteration {total, energy, pseudolabel}
     iters_run: int = 0
     warped_label: Optional[np.ndarray] = None         # the pseudolabel actually used
+    param_delta: float = float("nan")                 # mean relative change of the adapted (BN affine) params this call
 
 
 def warp_previous(curr_img: np.ndarray, prev_img: np.ndarray, prev_label: np.ndarray,
@@ -164,6 +165,7 @@ def adapt_slice(seg_model_base: nn.Module,
                 strategy = "confidence"          # tta_loss applies pixel_weights only in this form
 
     res = SliceResult(pred=None, probs=None, confidence=None, warped_label=warped_np)
+    _p0 = [p.detach().clone() for p in model.parameters() if p.requires_grad]
     best, since_improve = float("inf"), 0
     last_probs = None
     for _ in range(num_iterations):
@@ -190,6 +192,10 @@ def adapt_slice(seg_model_base: nn.Module,
             if since_improve >= patience:
                 break
 
+    with torch.no_grad():
+        _p1 = [p for p in model.parameters() if p.requires_grad]
+        num = sum((a - b).abs().sum().item() for a, b in zip(_p1, _p0)); den = sum(b.abs().sum().item() for b in _p0) + 1e-12
+        res.param_delta = num / den
     if variant == "eval_tta":
         model.eval()
         with torch.no_grad():

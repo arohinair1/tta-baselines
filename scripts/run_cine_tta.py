@@ -67,6 +67,20 @@ def frame_path(a, b, T, stride):
     return out
 
 
+def energy_weight(en, warped_label, device, sharpness: float):
+    """Prof. Wong's reweighting: feed the warped pseudolabel through the energy model, get one
+    sigmoid score per 16x16 patch (1 = looks clean), upsample to pixels. sharpness k = 0 -> the
+    raw score in [0,1]; k > 0 -> exp(-k * (1 - score)), which pushes low-energy patches toward 0
+    faster. Returns (H,W) weights and the mean patch score."""
+    oh = torch.from_numpy(np.stack([(warped_label == c) for c in range(3)]).astype(np.float32))[None].to(device)
+    with torch.no_grad():
+        sc = torch.sigmoid(en(oh))                                                         # (1,1,16,16)
+        w = torch.nn.functional.interpolate(sc, size=warped_label.shape, mode="bilinear", align_corners=False)[0, 0]
+    if sharpness > 0:
+        w = torch.exp(-sharpness * (1.0 - w))
+    return w.cpu().numpy().astype(np.float32), float(sc.mean())
+
+
 def run_sequence(name, seg, en, reg: F.FlowRegistrar, frames, path, lbl_start, lbl_end, args):
     """Walk `path`; returns per-frame rows and the final prediction."""
     cfg = SETTINGS[name]
@@ -78,11 +92,16 @@ def run_sequence(name, seg, en, reg: F.FlowRegistrar, frames, path, lbl_start, l
         prev_lbl = preds[-1] if preds else None
         if i == 0 and args.start == "gt":
             prev_img, prev_lbl = None, None          # first frame: no pseudolabel; GT is injected below
-        mask, trust_frac = None, float("nan")
+        mask, trust_frac, pl_energy = None, float("nan"), float("nan")
+        if args.pl_weight == "energy" and cfg and cfg[2] > 0 and prev_lbl is not None:
+            warped = reg(frames[t], prev_img, prev_lbl)
+            mask, pl_energy = energy_weight(en, warped, args.device, args.energy_sharpness)
+            trust_frac = float(mask[warped > 0].mean()) if (warped > 0).any() else float("nan")
         if args.trust and cfg and cfg[2] > 0 and len(preds) >= 2:
             # agreement between the pseudolabel from one step back and from two steps back
             a = reg(frames[t], imgs[-1], preds[-1]); b = reg(frames[t], imgs[-2], preds[-2])
-            mask = (a == b).astype(np.float32)
+            agree = (a == b).astype(np.float32)
+            mask = agree if mask is None else mask * agree
             heart = (a > 0) | (b > 0)
             trust_frac = float(mask[heart].mean()) if heart.any() else float("nan")
         t0 = time.time()
@@ -112,7 +131,8 @@ def run_sequence(name, seg, en, reg: F.FlowRegistrar, frames, path, lbl_start, l
         d_end = compute_dice(pred, lbl_end)[1:] if i == len(path) - 1 else [np.nan, np.nan]
         rows.append(dict(setting=name, step=i, frame=int(t), n_steps=len(path) - 1,
                          energy_before=e_before, energy_after=e_after, pl_loss=pl_loss, iters=iters,
-                         disp_px=disp, trust_frac=trust_frac, fg_px=int((pred > 0).sum()),
+                         disp_px=disp, trust_frac=trust_frac, pl_energy=pl_energy, fg_px=int((pred > 0).sum()),
+                         bn_delta=getattr(r, "param_delta", float("nan")),
                          dice_lv_start=d_start[0], dice_myo_start=d_start[1],
                          dice_lv_end=d_end[0], dice_myo_end=d_end[1], sec=time.time() - t0))
         preds.append(pred); imgs.append(frames[t])
@@ -147,6 +167,8 @@ def main():
     a.add_argument("--directions", default="ed2es", choices=["both", "ed2es", "es2ed"])
     a.add_argument("--start", default="pred", choices=["pred", "gt"])
     a.add_argument("--trust", action="store_true")
+    a.add_argument("--pl_weight", default="none", choices=["none", "energy"], help="energy: weight the pseudolabel loss per pixel by the energy of the warped label")
+    a.add_argument("--energy_sharpness", type=float, default=0.0, help="k in exp(-k(1-score)); 0 = raw score")
     a.add_argument("--carry_state", action="store_true")
     a.add_argument("--energy_mask", action="store_true")
     a.add_argument("--num_iterations", type=int, default=10); a.add_argument("--lr", type=float, default=1e-3)
@@ -192,19 +214,19 @@ def main():
     # summary
     md = [f"# Sequential TTA over cine frames  ({len(files)} slices, {args.frames})",
           f"stride {args.stride}, start={args.start}, trust={args.trust}, carry_state={args.carry_state}, energy_mask={args.energy_mask}, "
-          f"lr {args.lr}, {args.num_iterations} iters, lambda_p {args.lambda_p}, pl_kind {args.pl_kind}, lambda_mode {args.lambda_mode}, flow {args.flow_ckpt}", "",
+          f"lr {args.lr}, {args.num_iterations} iters, lambda_p {args.lambda_p}, pl_kind {args.pl_kind}, lambda_mode {args.lambda_mode}, pl_weight {args.pl_weight} (k={args.energy_sharpness}), flow {args.flow_ckpt}", "",
           "Dice at the START frame = plain per-frame TTA (no pseudolabel possible yet). Dice at the END frame = after walking the sequence.", "",
-          "| setting | start LV | start Myo | end LV (slice) | end Myo (slice) | end LV (vol) | end Myo (vol) | mean disp px | trust % | sec/frame |", "|---|---|---|---|---|---|---|---|---|---|"]
+          "| setting | start LV | start Myo | end LV (slice) | end Myo (slice) | end LV (vol) | end Myo (vol) | mean disp px | weight % | pl energy | BN delta | sec/frame |", "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     metrics = {}
     for s in args.settings:
         rs = [r for r in all_rows if r["setting"] == s]
         g = lambda key: float(np.nanmean([r[key] for r in rs]))
         vol = np.array([compute_dice(np.stack(end_preds[s][k]), np.stack(end_lbls[k]))[1:] for k in end_lbls]).mean(0)
         metrics[s] = dict(start_lv=g("dice_lv_start"), start_myo=g("dice_myo_start"), end_lv=g("dice_lv_end"), end_myo=g("dice_myo_end"),
-                          end_lv_vol=float(vol[0]), end_myo_vol=float(vol[1]), disp=g("disp_px"), trust=g("trust_frac"), sec=g("sec"))
+                          end_lv_vol=float(vol[0]), end_myo_vol=float(vol[1]), disp=g("disp_px"), trust=g("trust_frac"), pl_energy=g("pl_energy"), bn_delta=g("bn_delta"), sec=g("sec"))
         m = metrics[s]
         md.append(f"| {s} | {100*m['start_lv']:.2f} | {100*m['start_myo']:.2f} | {100*m['end_lv']:.2f} | {100*m['end_myo']:.2f} | "
-                  f"{100*m['end_lv_vol']:.2f} | {100*m['end_myo_vol']:.2f} | {m['disp']:.2f} | {100*m['trust']:.0f} | {m['sec']:.2f} |")
+                  f"{100*m['end_lv_vol']:.2f} | {100*m['end_myo_vol']:.2f} | {m['disp']:.2f} | {100*m['trust']:.0f} | {m['pl_energy']:.3f} | {m['bn_delta']:.4f} | {m['sec']:.2f} |")
     text = "\n".join(md); print("\n" + text)
     open(os.path.join(args.out, "RESULTS.md"), "w").write(text + "\n")
     json.dump({"args": vars(args), "metrics": metrics}, open(os.path.join(args.out, "metrics.json"), "w"), indent=2)
